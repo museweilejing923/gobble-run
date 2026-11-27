@@ -134,6 +134,23 @@ export function createRenderer(canvas) {
         context.fillRect(hash(i * 3) * FIELD.width, hash(i * 5 + 1) * 240, 2.4, 2.4);
       }
     }
+    // Birds crossing the sky, so the top half is never just empty orange:
+    // seven birds drifting slower than the ground, at different heights.
+    context.strokeStyle = 'rgba(60, 30, 20, 0.55)';
+    context.lineWidth = 3;
+    context.lineCap = 'round';
+    for (let i = 0; i < 7; i += 1) {
+      const span = 640;
+      const x = (((i * 173 + 90 - state.scrollX * 0.06) % (FIELD.width + 200)) + FIELD.width + 200) % (FIELD.width + 200) - 100;
+      const y = 110 + hash(i * 17) * 220 + Math.sin(state.elapsed * 1.4 + i * 2.1) * 6;
+      const flap = Math.sin(state.elapsed * 5 + i * 1.7) * 4;
+      const size = 9 + hash(i * 29) * 6;
+      context.beginPath();
+      context.moveTo(x - size, y - flap);
+      context.quadraticCurveTo(x - size / 2, y + 3, x, y);
+      context.quadraticCurveTo(x + size / 2, y + 3, x + size, y - flap);
+      context.stroke();
+    }
   }
 
   function drawDistant(state) {
@@ -222,6 +239,21 @@ export function createRenderer(canvas) {
       context.fill();
       context.fillStyle = PALETTE.pumpkinDark;
       context.fillRect(x - 2, FIELD.groundY - 30, 5, 8);
+    }
+    // Foreground grass at the very bottom, scrolling faster than the ground: a
+    // near layer that makes the run feel fast and the field less flat.
+    context.strokeStyle = 'rgba(40, 70, 20, 0.9)';
+    context.lineWidth = 3;
+    for (let i = 0; i < 18; i += 1) {
+      const span = 110;
+      const x = (((i * span + 40 - state.scrollX * 1.15) % (FIELD.width + 160)) + FIELD.width + 160) % (FIELD.width + 160) - 80;
+      const h = 12 + hash(i * 23) * 14;
+      context.beginPath();
+      context.moveTo(x, FIELD.height);
+      context.lineTo(x - 4, FIELD.height - h);
+      context.moveTo(x + 5, FIELD.height);
+      context.lineTo(x + 8, FIELD.height - h * 0.8);
+      context.stroke();
     }
   }
 
@@ -386,7 +418,8 @@ export function createRenderer(canvas) {
   function drawTurkey(player, elapsed, running) {
     const cx = player.x + PLAYER.width / 2;
     const ground = FIELD.groundY;
-    const height = player.sliding ? PLAYER.slideHeight : PLAYER.height;
+    // A dive tucks the turkey like a slide, matching the hitbox in world.js.
+    const height = (player.sliding || player.diving) ? PLAYER.slideHeight : PLAYER.height;
     const base = player.y + PLAYER.height;
     const stepPhase = running ? elapsed * 14 : 0;
     const legSwing = player.onGround && running ? Math.sin(stepPhase) * 10 : 0;
@@ -593,19 +626,33 @@ export function createRenderer(canvas) {
   }
 
   function drawHeart(x, y, size, filled) {
-    context.fillStyle = filled ? '#ff5a6e' : 'rgba(255, 255, 255, 0.25)';
+    // A dark outline keeps a heart readable over the bright sky, and a lost heart
+    // stays visible as a dark outline instead of fading to a pale ghost.
     context.beginPath();
     context.moveTo(x, y + size * 0.32);
     context.bezierCurveTo(x - size * 0.55, y - size * 0.28, x - size * 0.1, y - size * 0.62, x, y - size * 0.18);
     context.bezierCurveTo(x + size * 0.1, y - size * 0.62, x + size * 0.55, y - size * 0.28, x, y + size * 0.32);
     context.closePath();
+    context.fillStyle = filled ? '#ff4d64' : 'rgba(20, 12, 22, 0.45)';
     context.fill();
+    context.strokeStyle = filled ? 'rgba(40, 8, 12, 0.8)' : 'rgba(255, 246, 232, 0.85)';
+    context.lineWidth = 2;
+    context.stroke();
   }
 
   function drawHud(state, progress) {
     context.textBaseline = 'top';
+    // A dark pill behind the score block and one behind lives: the HUD used to sit
+    // straight on the sunset sky, and the pale Level line vanished under the clouds.
+    context.fillStyle = 'rgba(20, 12, 22, 0.55)';
+    roundRect(context, 12, 10, 196, 72, 14);
+    context.fill();
+    context.fillStyle = 'rgba(20, 12, 22, 0.55)';
+    roundRect(context, FIELD.width - 268, 10, 256, 72, 14);
+    context.fill();
     text(`Score ${Math.floor(state.score)}`, 24, 18, 30, PALETTE.text, 'left', 'top');
-    plain(`Level ${state.level}`, 24, 54, 20, PALETTE.muted, 'left', 'top');
+    // text() (not plain()) so the shadow keeps Level readable over a cloud.
+    text(`Level ${state.level}`, 24, 54, 20, PALETTE.muted, 'left', 'top');
     // The escape bar: the turkey's mark travels toward the forest.
     const barX = FIELD.width / 2 - 210;
     const barW = 420;
@@ -631,7 +678,14 @@ export function createRenderer(canvas) {
     context.fillStyle = '#6b4423';
     context.fillRect(treeX - 2, barY + 14, 4, 6);
     const left = Math.max(0, Math.ceil(GOAL_M - state.distance));
-    plain(`${left}m to the forest`, barX + barW / 2, barY + 32, 18, PALETTE.text, 'center', 'top');
+    // text() with its shadow, so the distance stays readable over the bright sky.
+    text(`${left}m to the forest`, barX + barW / 2, barY + 32, 18, PALETTE.text, 'center', 'top');
+    // The farmer's pressure, in plain words: under 130px he is close enough to grab.
+    if (state.farmerGap < 130) {
+      text('Farmer right behind you!', FIELD.width / 2, 88, 20, PALETTE.danger, 'center', 'top');
+    } else if (state.farmerGap < 185) {
+      text('The farmer is gaining…', FIELD.width / 2, 88, 18, PALETTE.corn, 'center', 'top');
+    }
     for (let i = 0; i < HEARTS; i += 1) {
       drawHeart(FIELD.width - 40 - i * (HEART + 12), 40, HEART, i < state.hearts);
     }
@@ -662,10 +716,36 @@ export function createRenderer(canvas) {
     context.restore();
   }
 
+  /** A short toast under the milestone banner: combo, near-miss and level-up news. */
+  function drawToast(state) {
+    if (!state.toast) return;
+    const age = state.elapsed - state.toastAt;
+    if (age < 0 || age >= 2) return;
+    const fade = age > 1.5 ? (2 - age) / 0.5 : 1;
+    const width = 460;
+    const x = (FIELD.width - width) / 2;
+    const y = 156;
+    context.save();
+    context.globalAlpha = fade;
+    context.fillStyle = 'rgba(24, 14, 26, 0.82)';
+    roundRect(context, x, y, width, 40, 20);
+    context.fill();
+    context.strokeStyle = PALETTE.corn;
+    context.lineWidth = 2;
+    roundRect(context, x, y, width, 40, 20);
+    context.stroke();
+    text(state.toast, FIELD.width / 2, y + 27, 21, PALETTE.corn, 'center');
+    context.restore();
+  }
+
   function drawPanel(title, lines, prompt, accent, panelX) {
     const height = PANEL.top + lines.length * PANEL.line + PANEL.bottom;
     const x = panelX === undefined ? (FIELD.width - PANEL.width) / 2 : panelX;
     const y = (FIELD.height - height) / 2;
+    // Centre the text on the panel itself, not on the field: the title panel sits
+    // right of centre so the turkey shows on the left, and centring on the field
+    // pushed every line's first letters outside the panel, onto the bright sky.
+    const cx = x + PANEL.width / 2;
     context.fillStyle = PALETTE.panel;
     roundRect(context, x, y, PANEL.width, height, 18);
     context.fill();
@@ -674,11 +754,11 @@ export function createRenderer(canvas) {
     roundRect(context, x, y, PANEL.width, height, 18);
     context.stroke();
     context.textBaseline = 'alphabetic';
-    text(title, FIELD.width / 2, y + 82, 46, PALETTE.text, 'center');
+    text(title, cx, y + 82, 46, PALETTE.text, 'center');
     for (let i = 0; i < lines.length; i += 1) {
-      plain(lines[i], FIELD.width / 2, y + PANEL.top + i * PANEL.line, 21, PALETTE.muted, 'center');
+      plain(lines[i], cx, y + PANEL.top + i * PANEL.line, 21, PALETTE.muted, 'center');
     }
-    text(prompt, FIELD.width / 2, y + height - 38, 23, PALETTE.corn, 'center');
+    text(prompt, cx, y + height - 38, 23, PALETTE.corn, 'center');
   }
 
   /** Paint one frame: the field, then the HUD or a panel for the screen the game is on. */
@@ -700,7 +780,14 @@ export function createRenderer(canvas) {
       return;
     }
     drawHud(state, progress);
-    if (screen === SCREEN_PLAY) drawMilestoneBanner(state);
+    if (screen === SCREEN_PLAY) {
+      drawMilestoneBanner(state);
+      drawToast(state);
+      // The live combo, under the score pill: it only shows once a streak starts.
+      if (state.combo >= 3) {
+        text(`Combo x${state.combo}`, 24, 92, 22, PALETTE.golden, 'left', 'top');
+      }
+    }
     if (screen === SCREEN_PAUSED) {
       drawPanel('Paused', ['The farmer will wait. The oven will not cool down.', 'Space to jump · ↓ to slide · P to pause · M to mute'], 'Press P or click to keep running');
     } else if (screen === SCREEN_OVER) {

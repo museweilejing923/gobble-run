@@ -15,7 +15,11 @@ export const GOAL_M = 1500;
 
 export const PLAYER = {
   x: 220,
-  width: 64,
+  // Wider than before (64 -> 76) so the turkey reads in the 1280-wide field, but
+  // no taller (58): raising the height lowered the feet at the same jump apex,
+  // and the diving turkey then clipped knives it used to clear. Keeping the
+  // height means the jump, the hitbox and the autopilot timing are unchanged.
+  width: 76,
   height: 58,
   slideHeight: 30,
   /** Jump speed: with GRAVITY this clears about 185 px, enough for the oven. */
@@ -100,6 +104,18 @@ export const CORN = {
 export const SCORE = {
   perMetre: 1,
   dodgePoints: 5,
+  /** Combo: eating corn or dodging an obstacle without taking a hit builds a
+    streak, capped at comboMax so the score cannot run away; each corn kernel
+    then pays its base plus this much per combo step, and a streak of 5 dodges
+    pays the near-miss bonus instead of the plain dodge points. The streak
+    resets to zero on any hit, and fades after comboWindow seconds without a
+    corn or a dodge. */
+  comboWindow: 3,
+  comboPerStep: 1,
+  comboMax: 8,
+  nearMissPoints: 15,
+  /** A golden kernel also pushes the farmer back a little: a burst of energy. */
+  goldenPushBack: 25,
 };
 
 /** Seconds of play per level: speeds and spawn rates stop growing at the last level. */

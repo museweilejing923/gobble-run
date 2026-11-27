@@ -2,7 +2,7 @@
 // rules forward from a fresh world for a fixed number of steps, steered by a simple autopilot
 // (jump the ground obstacles in time, slide under the knives, hop for the corn arcs), so the
 // frame is what a short game really looks like and the same seed always gives the same frame.
-import { FIELD, PLAYER, STEP } from './config.js';
+import { FIELD, STEP } from './config.js';
 import { EVENT_OVER, EVENT_WIN, KIND_FENCE, KIND_KNIFE, KIND_OVEN } from './world.js';
 import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE, SCREEN_WIN } from './render.js';
 
@@ -19,9 +19,12 @@ const SLIDE_LEAD = 0.42;
 /** The end scene's pilot reacts too late, as a hurried player does. */
 const LATE_LEAD = 0.1;
 
+/** The hitbox front edge, in pixels from the player's x: 16 inset + 44 hitbox. */
+const HITBOX_FRONT = 60;
+
 /** Seconds until the turkey's front reaches `x`, at the world's current speed. */
 function timeToReach(state, x) {
-  return Math.max(0, (x - (state.player.x + PLAYER.width)) / state.speed);
+  return Math.max(0, (x - (state.player.x + HITBOX_FRONT)) / state.speed);
 }
 
 /**
@@ -49,7 +52,7 @@ function autopilot(state, lead, clumsy) {
     const knife = state.knives[i];
     if (!knife.active) continue;
     if (knife.x + knife.width < player.x) continue;
-    const time = Math.max(0, (knife.x - (player.x + PLAYER.width)) / (state.speed + 300));
+    const time = Math.max(0, (knife.x - (player.x + HITBOX_FRONT)) / (state.speed + 300));
     if (time < knifeTime) knifeTime = time;
   }
   const obstacleTime = nearest === null ? Infinity : timeToReach(state, nearest.x);
@@ -83,6 +86,30 @@ function autopilot(state, lead, clumsy) {
   return { jump: false, slide: false };
 }
 
+/** A frame worth judging: an oven on screen, a knife closing in, and corn to eat.
+  The old fixed-time frames were often empty (no oven, no knife, the farmer off
+  screen), because the spawns are random: now staging waits for a dense frame. */
+function frameIsDense(state) {
+  let oven = false;
+  let obstacle = false;
+  let knife = false;
+  let corn = false;
+  for (let i = 0; i < state.obstacles.length; i += 1) {
+    const item = state.obstacles[i];
+    if (!item.active) continue;
+    if (item.x > 280 && item.x < 1050) obstacle = true;
+    if (item.kind === KIND_OVEN && item.x > 280 && item.x < 1050) oven = true;
+  }
+  for (let i = 0; i < state.knives.length; i += 1) {
+    const item = state.knives[i];
+    if (item.active && item.x > 350 && item.x < 1150) knife = true;
+  }
+  for (let i = 0; i < state.corns.length; i += 1) {
+    if (state.corns[i].active) corn = true;
+  }
+  return oven && obstacle && knife && corn;
+}
+
 /**
  * Set `world` to the named scene (start, play, chase, end or win; any other name is start)
  * and return the screen to draw over it and the best score to show.
@@ -110,7 +137,33 @@ export function stageShot(name, world) {
     if (events & EVENT_OVER) return { screen: SCREEN_OVER, best: world.state.score };
     if (events & EVENT_WIN) return { screen: SCREEN_WIN, best: world.state.score };
   }
+  if (name === 'play') {
+    // The fixed 24s frame was often empty, so keep running (at most 40s more)
+    // until an oven, a knife and corn are all on screen at once.
+    for (let i = 0; i < 40 / STEP && !frameIsDense(world.state); i += 1) {
+      const decision = autopilot(world.state, lead, false);
+      const jumpPressed = decision.jump && !lastJump;
+      lastJump = decision.jump;
+      const events = world.step(STEP, jumpPressed, decision.jump, decision.slide, false);
+      if (events & EVENT_OVER) return { screen: SCREEN_OVER, best: world.state.score };
+      if (events & EVENT_WIN) return { screen: SCREEN_WIN, best: world.state.score };
+    }
+    // Bring the farmer into the frame: at the natural gap he has drifted off the
+    // left edge, so the play shot never showed the chase at all.
+    world.state.farmerGap = 140;
+  }
   if (name === 'chase') {
+    // Wait first (at most 12s) for a dense frame, while the farmer is still at
+    // his natural gap: pulling him in first would make any hit an instant grab
+    // (gap 82 minus a 95 hit pull), and the extra waiting would kill the run.
+    for (let i = 0; i < 12 / STEP && !frameIsDense(world.state); i += 1) {
+      const decision = autopilot(world.state, lead, false);
+      const jumpPressed = decision.jump && !lastJump;
+      lastJump = decision.jump;
+      const events = world.step(STEP, jumpPressed, decision.jump, decision.slide, false);
+      if (events & EVENT_OVER) return { screen: SCREEN_OVER, best: world.state.score };
+      if (events & EVENT_WIN) return { screen: SCREEN_WIN, best: world.state.score };
+    }
     // Pull the farmer right up behind the turkey for the close-call frame.
     world.state.farmerGap = 82;
     for (let i = 0; i < 2 / STEP; i += 1) {

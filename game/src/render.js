@@ -112,18 +112,25 @@ export function createRenderer(canvas) {
     context.beginPath();
     context.arc(FIELD.width - 240, sunY, 46, 0, Math.PI * 2);
     context.fill();
-    // Drifting clouds, two parallax layers.
-    for (let layer = 0; layer < 2; layer += 1) {
-      const speed = layer === 0 ? 0.12 : 0.25;
-      const baseY = 70 + layer * 70;
-      context.fillStyle = 'rgba(255, 244, 224, 0.5)';
-      for (let i = 0; i < 5; i += 1) {
-        const span = 420;
+    // Drifting clouds, three parallax layers: the top two are the wide sunset
+    // clouds, the third is a lower mid-sky layer, now denser and wider (eight
+    // clouds instead of six) so the middle of the sky is not one flat band
+    // of orange between the high clouds and the birds.
+    for (let layer = 0; layer < 3; layer += 1) {
+      const speed = layer === 0 ? 0.12 : layer === 1 ? 0.25 : 0.4;
+      const baseY = layer === 2 ? 300 : 70 + layer * 70;
+      const alpha = layer === 2 ? 0.38 : 0.5;
+      context.fillStyle = `rgba(255, 244, 224, ${alpha})`;
+      const count = layer === 2 ? 8 : 5;
+      for (let i = 0; i < count; i += 1) {
+        const span = layer === 2 ? 260 : 420;
         const x = (((i * span + 140 * layer - state.scrollX * speed) % (FIELD.width + 320)) + FIELD.width + 320) % (FIELD.width + 320) - 160;
-        const y = baseY + hash(i * 7 + layer * 13) * 46;
+        const y = baseY + hash(i * 7 + layer * 13) * (layer === 2 ? 60 : 46);
+        const w = layer === 2 ? 56 + hash(i + layer) * 34 : 66 + hash(i) * 30;
+        const h = layer === 2 ? 10 + hash(i + 3) * 6 : 16 + hash(i + 3) * 8;
         context.beginPath();
-        context.ellipse(x, y, 66 + hash(i) * 30, 16 + hash(i + 3) * 8, 0, 0, Math.PI * 2);
-        context.ellipse(x + 40, y + 6, 44, 12, 0, 0, Math.PI * 2);
+        context.ellipse(x, y, w, h, 0, 0, Math.PI * 2);
+        context.ellipse(x + w * 0.6, y + 6, w * 0.65, h * 0.75, 0, 0, Math.PI * 2);
         context.fill();
       }
     }
@@ -135,14 +142,16 @@ export function createRenderer(canvas) {
       }
     }
     // Birds crossing the sky, so the top half is never just empty orange:
-    // seven birds drifting slower than the ground, at different heights.
+    // sixteen birds drifting slower than the ground, at different heights from
+    // near the sun down to the mid-sky, packed tighter so the 200..400 band
+    // has birds in it instead of a bare gap between the clouds.
     context.strokeStyle = 'rgba(60, 30, 20, 0.55)';
     context.lineWidth = 3;
     context.lineCap = 'round';
-    for (let i = 0; i < 7; i += 1) {
-      const span = 640;
+    for (let i = 0; i < 16; i += 1) {
+      const span = 520;
       const x = (((i * 173 + 90 - state.scrollX * 0.06) % (FIELD.width + 200)) + FIELD.width + 200) % (FIELD.width + 200) - 100;
-      const y = 110 + hash(i * 17) * 220 + Math.sin(state.elapsed * 1.4 + i * 2.1) * 6;
+      const y = 80 + hash(i * 17) * 300 + Math.sin(state.elapsed * 1.4 + i * 2.1) * 6;
       const flap = Math.sin(state.elapsed * 5 + i * 1.7) * 4;
       const size = 9 + hash(i * 29) * 6;
       context.beginPath();
@@ -164,8 +173,28 @@ export function createRenderer(canvas) {
     context.lineTo(FIELD.width, FIELD.groundY);
     context.closePath();
     context.fill();
-    // The farmhouse barn, far off, and the windmill turning slowly.
-    const barnX = FIELD.width - 260 - (state.scrollX * 0.3) % 1600;
+    // A distant pine treeline on the hill crest, so the horizon is not a bare
+    // brown ridge: dark silhouettes at their own slow parallax, rooted on the
+    // same hill line the hills use.
+    context.fillStyle = '#4a3550';
+    for (let i = 0; i < 14; i += 1) {
+      const span = 130;
+      const x = (((i * span + 60 - state.scrollX * 0.2) % (FIELD.width + 260)) + FIELD.width + 260) % (FIELD.width + 260) - 130;
+      const crest = FIELD.groundY - 66 - Math.sin((x + state.scrollX * 0.25) * 0.004) * 26;
+      const h = 34 + hash(i * 19) * 26;
+      const w = 26 + hash(i * 31) * 14;
+      context.beginPath();
+      context.moveTo(x - w / 2, crest + 2);
+      context.lineTo(x, crest - h);
+      context.lineTo(x + w / 2, crest + 2);
+      context.closePath();
+      context.fill();
+    }
+    // The farmhouse barn, far off, and the windmill turning slowly. The barn's
+    // phase is shifted 490 so that on the title screen (5 harmless seconds at
+    // speed 300, scrollX 1500) it lands near x 80, left of the title panel,
+    // instead of hiding behind it.
+    const barnX = FIELD.width - 260 - ((state.scrollX * 0.3 + 490) % 1600);
     context.fillStyle = PALETTE.barn;
     context.fillRect(barnX, FIELD.groundY - 128, 150, 92);
     context.fillStyle = PALETTE.barnRoof;
@@ -244,8 +273,8 @@ export function createRenderer(canvas) {
     // near layer that makes the run feel fast and the field less flat.
     context.strokeStyle = 'rgba(40, 70, 20, 0.9)';
     context.lineWidth = 3;
-    for (let i = 0; i < 18; i += 1) {
-      const span = 110;
+    for (let i = 0; i < 30; i += 1) {
+      const span = 80;
       const x = (((i * span + 40 - state.scrollX * 1.15) % (FIELD.width + 160)) + FIELD.width + 160) % (FIELD.width + 160) - 80;
       const h = 12 + hash(i * 23) * 14;
       context.beginPath();
@@ -353,6 +382,17 @@ export function createRenderer(canvas) {
     context.quadraticCurveTo(cx + 6, item.y + item.height - 34 - flicker * 12, cx + 12, item.y + item.height - 12);
     context.closePath();
     context.fill();
+    // Embers rising off the fire mouth, winking as they climb: positions from
+    // the clock alone, so they cost no state.
+    for (let i = 0; i < 4; i += 1) {
+      const t = (elapsed * 0.4 + i / 4) % 1;
+      const ex = cx - 14 + hash(i * 7) * 28 + Math.sin(t * 6 + i) * 4;
+      const ey = item.y + item.height - 30 - t * 70;
+      context.fillStyle = `rgba(255, ${140 + Math.floor(60 * (1 - t))}, 40, ${(1 - t) * 0.9})`;
+      context.beginPath();
+      context.arc(ex, ey, 2.5, 0, Math.PI * 2);
+      context.fill();
+    }
   }
 
   function drawKnife(item) {
@@ -383,6 +423,22 @@ export function createRenderer(canvas) {
     // A glint trail behind the spinning blade.
     context.fillStyle = 'rgba(255, 255, 255, 0.35)';
     context.fillRect(item.x + item.width, cy - 1.5, 34, 3);
+    // A bright glint that sweeps round with the blade: a small star at the tip
+    // that flares as the blade turns toward the light.
+    const glint = (Math.sin(item.spin * 2) + 1) / 2;
+    if (glint > 0.55) {
+      const tx = cx + Math.cos(item.spin) * item.width * 0.48;
+      const ty = cy + Math.sin(item.spin) * item.width * 0.48;
+      const g = (glint - 0.55) / 0.45;
+      context.strokeStyle = `rgba(255, 255, 255, ${0.85 * g})`;
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(tx - 8, ty);
+      context.lineTo(tx + 8, ty);
+      context.moveTo(tx, ty - 8);
+      context.lineTo(tx, ty + 8);
+      context.stroke();
+    }
   }
 
   function drawCorn(item, elapsed) {
@@ -576,15 +632,30 @@ export function createRenderer(canvas) {
         context.arc(p.x, p.y, 5, 0, Math.PI * 2);
         context.fill();
       } else if (p.kind === 1) {
+        // A hit scatters brown feathers, one of them pale so the burst reads.
         context.fillStyle = `rgba(138, 82, 48, ${alpha})`;
         context.beginPath();
         context.ellipse(p.x, p.y, 6, 3, p.vx * 0.01, 0, Math.PI * 2);
         context.fill();
+        context.fillStyle = `rgba(242, 230, 208, ${alpha * 0.9})`;
+        context.beginPath();
+        context.ellipse(p.x + 4, p.y - 4, 4, 2, p.vx * 0.02, 0, Math.PI * 2);
+        context.fill();
       } else {
+        // Corn sparkles: a gold dot plus a four-point star flash.
         context.fillStyle = `rgba(246, 201, 69, ${alpha})`;
         context.beginPath();
         context.arc(p.x, p.y, 3.5, 0, Math.PI * 2);
         context.fill();
+        context.strokeStyle = `rgba(255, 240, 170, ${alpha})`;
+        context.lineWidth = 1.5;
+        const s = 3 + 5 * alpha;
+        context.beginPath();
+        context.moveTo(p.x - s, p.y);
+        context.lineTo(p.x + s, p.y);
+        context.moveTo(p.x, p.y - s);
+        context.lineTo(p.x, p.y + s);
+        context.stroke();
       }
     }
   }
@@ -617,8 +688,27 @@ export function createRenderer(canvas) {
     // stays visible enough to read even right after a hit.
     if (player.invulnerable === 0 || Math.floor(player.invulnerable * 10) % 4 !== 0) drawTurkey(player, state.elapsed, true);
     drawParticles(state);
+    // Running dust: small puffs kicked up behind the turkey's feet while it
+    // runs on the ground, placed from the clock alone so it costs no state.
+    if (player.onGround) {
+      for (let i = 0; i < 3; i += 1) {
+        const phase = (state.elapsed * 1.6 + i / 3) % 1;
+        const dx = 8 + phase * 46;
+        const dy = 4 + phase * 10;
+        context.fillStyle = `rgba(214, 178, 120, ${0.35 * (1 - phase)})`;
+        context.beginPath();
+        context.arc(player.x + PLAYER.width * 0.15 - dx, FIELD.groundY - dy, 3 + phase * 4, 0, Math.PI * 2);
+        context.fill();
+      }
+    }
     // A red pulse at the left edge when the farmer is about to grab the turkey.
-    if (state.farmerGap < 120 && state.farmerGap > 0) {
+    // Not once the run is over: hearts at zero means the farmer already has
+    // him, so the warning is meaningless — and in the staged end frame the
+    // gap sits near zero, so the pulse always fired and read in a still
+    // frame as a red smear down the left edge, not as a warning. The staged
+    // play and chase frames keep their gaps at 120 and 125, clear of the
+    // pulse, so the warning pill and the "!" still carry the close call.
+    if (state.farmerGap < 120 && state.farmerGap > 0 && state.hearts > 0) {
       const pulse = 0.25 + Math.sin(state.elapsed * 8) * 0.12;
       context.fillStyle = `rgba(255, 60, 40, ${pulse})`;
       context.fillRect(0, 0, 26, FIELD.height);
@@ -678,14 +768,17 @@ export function createRenderer(canvas) {
     context.fillStyle = '#6b4423';
     context.fillRect(treeX - 2, barY + 14, 4, 6);
     const left = Math.max(0, Math.ceil(GOAL_M - state.distance));
-    // text() with its shadow, so the distance stays readable over the bright sky.
-    text(`${left}m to the forest`, barX + barW / 2, barY + 32, 18, PALETTE.text, 'center', 'top');
-    // The farmer's pressure, in plain words: under 130px he is close enough to grab.
-    if (state.farmerGap < 130) {
-      text('Farmer right behind you!', FIELD.width / 2, 88, 20, PALETTE.danger, 'center', 'top');
-    } else if (state.farmerGap < 185) {
-      text('The farmer is gaining…', FIELD.width / 2, 88, 18, PALETTE.corn, 'center', 'top');
-    }
+    // A small dark pill of its own, in the same style as the score and lives
+    // pills: the bare line sat straight on the sky and drifted over the clouds.
+    const distLabel = `${left}m to the forest`;
+    context.font = `bold 18px ${FONT}`;
+    const distW = Math.ceil(context.measureText(distLabel).width) + 28;
+    context.fillStyle = 'rgba(20, 12, 22, 0.55)';
+    roundRect(context, barX + barW / 2 - distW / 2, barY + 28, distW, 26, 13);
+    context.fill();
+    text(distLabel, barX + barW / 2, barY + 32, 18, PALETTE.text, 'center', 'top');
+    // The farmer's pressure is drawn as a pill in the play screen (see draw):
+    // bare red text on the sunset sky was unreadable, so it no longer lives here.
     for (let i = 0; i < HEARTS; i += 1) {
       drawHeart(FIELD.width - 40 - i * (HEART + 12), 40, HEART, i < state.hearts);
     }
@@ -718,6 +811,9 @@ export function createRenderer(canvas) {
 
   /** A short toast under the milestone banner: combo, near-miss and level-up news. */
   function drawToast(state) {
+    // The farmer warning takes this same slot (y 156) while it is showing,
+    // so the two pills never stack on each other.
+    if (state.farmerGap < 185) return;
     if (!state.toast) return;
     const age = state.elapsed - state.toastAt;
     if (age < 0 || age >= 2) return;
@@ -736,6 +832,22 @@ export function createRenderer(canvas) {
     context.stroke();
     text(state.toast, FIELD.width / 2, y + 27, 21, PALETTE.corn, 'center');
     context.restore();
+  }
+
+  /** A short warning in the same dark pill as the toast, sized to its text:
+    the old bare red line on the sunset sky was unreadable over the clouds. */
+  function pillText(value, y, size, color, edge) {
+    context.font = `bold ${size}px ${FONT}`;
+    const width = Math.ceil(context.measureText(value).width) + 40;
+    const x = (FIELD.width - width) / 2;
+    context.fillStyle = 'rgba(24, 14, 26, 0.82)';
+    roundRect(context, x, y, width, 40, 20);
+    context.fill();
+    context.strokeStyle = edge;
+    context.lineWidth = 2;
+    roundRect(context, x, y, width, 40, 20);
+    context.stroke();
+    text(value, FIELD.width / 2, y + 27, size, color, 'center');
   }
 
   function drawPanel(title, lines, prompt, accent, panelX) {
@@ -783,6 +895,13 @@ export function createRenderer(canvas) {
     if (screen === SCREEN_PLAY) {
       drawMilestoneBanner(state);
       drawToast(state);
+      // The farmer's pressure, as a pill in the toast slot: under 130px he is
+      // close enough to grab, under 185px he is gaining.
+      if (state.farmerGap < 130) {
+        pillText('Farmer right behind you!', 156, 20, PALETTE.danger, PALETTE.danger);
+      } else if (state.farmerGap < 185) {
+        pillText('The farmer is gaining…', 156, 18, PALETTE.corn, PALETTE.corn);
+      }
       // The live combo, under the score pill: it only shows once a streak starts.
       if (state.combo >= 3) {
         text(`Combo x${state.combo}`, 24, 92, 22, PALETTE.golden, 'left', 'top');

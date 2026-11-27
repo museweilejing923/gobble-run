@@ -7,8 +7,29 @@ import { EVENT_OVER, EVENT_WIN, KIND_FENCE, KIND_KNIFE, KIND_OVEN } from './worl
 import { SCREEN_OVER, SCREEN_PLAY, SCREEN_TITLE, SCREEN_WIN } from './render.js';
 
 const START_SECONDS = 5;
-const PLAY_SECONDS = 24;
-const CHASE_SECONDS = 18;
+/** The fixed run before the play shot starts looking for a dense frame: 10s,
+  not 24s. The first dense frame is usually found soon after (seed 7: 12.7s),
+  while the turkey still has all three hearts; hearts never come back, so a
+  frame found after a hit can only show fewer of them. */
+const PLAY_SECONDS = 10;
+/** Same for the chase shot: the wait for a dense frame starts at 10s, so its
+  first dense frame is usually a full-heart one too. */
+const CHASE_SECONDS = 10;
+/** How long the chase waits for a fully dense frame (oven + knife + corn)
+  before falling back to a looser one. */
+const CHASE_DENSE_WAIT_SECONDS = 30;
+/** How long it then waits for the looser frame (an oven or a knife, plus corn). */
+const CHASE_LOOSE_WAIT_SECONDS = 6;
+/** How long the chase waits for its second dense frame, and how much further
+  along that frame must be than the first: the play shot stops at the first
+  dense frame, so the chase needs a later one or the two shots are the same
+  frame with the farmer nudged (seed 7: both were score 494, 209m, identical
+  layout). 100m is about 5 seconds of running — score, distance and the whole
+  obstacle layout have all changed by then — and a shorter gain keeps the
+  second frame findable before the autopilot's luck runs out (seed 6's second
+  dense frame is only 115m past its first; at 150m the chase died first). */
+const CHASE_SECOND_WAIT_SECONDS = 30;
+const CHASE_SECOND_MIN_GAIN_M = 100;
 const END_LIMIT_SECONDS = 600;
 const WIN_LIMIT_SECONDS = 120;
 
@@ -88,7 +109,10 @@ function autopilot(state, lead, clumsy) {
 
 /** A frame worth judging: an oven on screen, a knife closing in, and corn to eat.
   The old fixed-time frames were often empty (no oven, no knife, the farmer off
-  screen), because the spawns are random: now staging waits for a dense frame. */
+  screen), because the spawns are random: now staging waits for a dense frame.
+  Everything counted must be fully inside the frame, not clipped at an edge:
+  the play shot once caught a corn arc and the farmer's pitchfork half off
+  screen, because a single kernel at x 5 counted as "corn on screen". */
 function frameIsDense(state) {
   let oven = false;
   let obstacle = false;
@@ -97,17 +121,59 @@ function frameIsDense(state) {
   for (let i = 0; i < state.obstacles.length; i += 1) {
     const item = state.obstacles[i];
     if (!item.active) continue;
-    if (item.x > 280 && item.x < 1050) obstacle = true;
-    if (item.kind === KIND_OVEN && item.x > 280 && item.x < 1050) oven = true;
+    if (item.x > 40 && item.x + item.width < 1240) obstacle = true;
+    if (item.kind === KIND_OVEN && item.x > 40 && item.x + item.width < 1240) oven = true;
   }
   for (let i = 0; i < state.knives.length; i += 1) {
     const item = state.knives[i];
-    if (item.active && item.x > 350 && item.x < 1150) knife = true;
+    if (item.active && item.x > 40 && item.x + item.width < 1240) knife = true;
   }
   for (let i = 0; i < state.corns.length; i += 1) {
-    if (state.corns[i].active) corn = true;
+    const item = state.corns[i];
+    if (!item.active) continue;
+    // At least one kernel fully in frame and well clear of the edges.
+    if (item.x > 100 && item.x + item.size < 1180) corn = true;
   }
   return oven && obstacle && knife && corn;
+}
+
+/** The fallback frame: an oven or a knife, plus corn, all fully in frame.
+  Used only when no fully dense frame turns up in the chase wait. */
+function frameIsLoose(state) {
+  let hot = false;
+  let corn = false;
+  for (let i = 0; i < state.obstacles.length; i += 1) {
+    const item = state.obstacles[i];
+    if (!item.active) continue;
+    if (item.kind === KIND_OVEN && item.x > 40 && item.x + item.width < 1240) hot = true;
+  }
+  for (let i = 0; i < state.knives.length; i += 1) {
+    const item = state.knives[i];
+    if (item.active && item.x > 40 && item.x + item.width < 1240) hot = true;
+  }
+  for (let i = 0; i < state.corns.length; i += 1) {
+    const item = state.corns[i];
+    if (!item.active) continue;
+    // At least one kernel fully in frame and well clear of the edges.
+    if (item.x > 100 && item.x + item.size < 1180) corn = true;
+  }
+  return hot && corn;
+}
+
+/** Shift the scenery (scrollX only) until the barn sits just right of the
+  centred over panel, which spans 260..1020: the barn's x is
+  1020 - ((scrollX * 0.3 + 490) % 1600), so a barn at 955..975 needs that
+  modulo at 45..65. Stepping scrollX by 10 moves the modulo by 3, so the
+  window is reached within a few steps; the cap is one full cycle, far more
+  than needed. scrollX is a render-only input (the world writes it but never
+  reads it), so moving it changes nothing about the run that just ended —
+  only where the scenery sits in the frozen frame. */
+function nudgeBarnRightOfPanel(state) {
+  for (let i = 0; i < 600; i += 1) {
+    const mod = ((state.scrollX * 0.3 + 490) % 1600 + 1600) % 1600;
+    if (mod >= 45 && mod <= 65) return;
+    state.scrollX += 10;
+  }
 }
 
 /**
@@ -129,12 +195,28 @@ export function stageShot(name, world) {
   const lead = name === 'end' ? LATE_LEAD : JUMP_LEAD;
   const clumsy = name === 'end';
   let lastJump = false;
+  /**
+   * The frozen frame for a caught run: the turkey is drawn, not blinked away.
+   * A hit sets invulnerable for 1.6s and the renderer hides the turkey one
+   * frame in four while it lasts, so the staged end frame caught the turkey
+   * mid-blink (invisible) on every seed. Clearing it here is staging-only:
+   * the real game's blink is untouched, and the frame is drawn after staging.
+   */
+  function overResult() {
+    world.state.player.invulnerable = 0;
+    return { screen: SCREEN_OVER, best: world.state.score };
+  }
   for (let i = 0; i < limit / STEP; i += 1) {
     const decision = autopilot(world.state, lead, clumsy);
     const jumpPressed = decision.jump && !lastJump;
     lastJump = decision.jump;
     const events = world.step(STEP, jumpPressed, decision.jump, decision.slide, false);
-    if (events & EVENT_OVER) return { screen: SCREEN_OVER, best: world.state.score };
+    if (events & EVENT_OVER) {
+      // The end scene's barn is shifted right of the panel before the frame
+      // is drawn (see nudgeBarnRightOfPanel); other scenes keep what they have.
+      if (name === 'end') nudgeBarnRightOfPanel(world.state);
+      return overResult();
+    }
     if (events & EVENT_WIN) return { screen: SCREEN_WIN, best: world.state.score };
   }
   if (name === 'play') {
@@ -145,36 +227,75 @@ export function stageShot(name, world) {
       const jumpPressed = decision.jump && !lastJump;
       lastJump = decision.jump;
       const events = world.step(STEP, jumpPressed, decision.jump, decision.slide, false);
-      if (events & EVENT_OVER) return { screen: SCREEN_OVER, best: world.state.score };
+      if (events & EVENT_OVER) return overResult();
       if (events & EVENT_WIN) return { screen: SCREEN_WIN, best: world.state.score };
     }
     // Bring the farmer into the frame: at the natural gap he has drifted off the
-    // left edge, so the play shot never showed the chase at all.
-    world.state.farmerGap = 140;
+    // left edge, so the play shot never showed the chase at all. Gap 120 puts
+    // him at x 38, his pitchfork (a few pixels left of him) still in frame —
+    // and exactly at the red edge pulse's threshold, so the pulse (which fires
+    // under gap 120) stays off: in a still frame the pulse reads as a red
+    // smear down the left edge, not as a warning. The warning pill and the
+    // "!" both fire under 130, so the frame still reads as a close call.
+    world.state.farmerGap = 120;
   }
   if (name === 'chase') {
-    // Wait first (at most 12s) for a dense frame, while the farmer is still at
-    // his natural gap: pulling him in first would make any hit an instant grab
-    // (gap 82 minus a 95 hit pull), and the extra waiting would kill the run.
-    for (let i = 0; i < 12 / STEP && !frameIsDense(world.state); i += 1) {
+    // Wait (at most 30s) for a dense frame: an oven, a knife and corn all
+    // fully in frame. The wait starts at 10s, so the first dense frame is
+    // usually caught while the turkey still has all three hearts (seed 7:
+    // 12.7s, 3 hearts); hearts never come back, so a frame found after a hit
+    // can only show fewer, and waiting longer after a hit cannot recover a
+    // full-heart frame — the early start is the whole preference.
+    for (let i = 0; i < CHASE_DENSE_WAIT_SECONDS / STEP && !frameIsDense(world.state); i += 1) {
       const decision = autopilot(world.state, lead, false);
       const jumpPressed = decision.jump && !lastJump;
       lastJump = decision.jump;
       const events = world.step(STEP, jumpPressed, decision.jump, decision.slide, false);
-      if (events & EVENT_OVER) return { screen: SCREEN_OVER, best: world.state.score };
+      if (events & EVENT_OVER) return overResult();
       if (events & EVENT_WIN) return { screen: SCREEN_WIN, best: world.state.score };
     }
-    // Pull the farmer right up behind the turkey for the close-call frame.
-    world.state.farmerGap = 82;
-    for (let i = 0; i < 2 / STEP; i += 1) {
-      const decision = autopilot(world.state, lead, false);
-      const jumpPressed = decision.jump && !lastJump;
-      lastJump = decision.jump;
-      const events = world.step(STEP, jumpPressed, decision.jump, decision.slide, false);
-      if (events & EVENT_OVER) return { screen: SCREEN_OVER, best: world.state.score };
-      if (events & EVENT_WIN) return { screen: SCREEN_WIN, best: world.state.score };
+    // The play shot stops at the first dense frame, so the chase must move on:
+    // wait for a second dense frame at least CHASE_SECOND_MIN_GAIN_M further
+    // along, or the two shots are the same frame with the farmer nudged.
+    // If no second dense frame turns up in the wait, the loose fallback below
+    // still takes whatever the run has reached — a later frame than the play
+    // shot's, just not a dense one.
+    if (frameIsDense(world.state)) {
+      const firstDenseDist = world.state.distance;
+      for (let i = 0; i < CHASE_SECOND_WAIT_SECONDS / STEP && !(frameIsDense(world.state) && world.state.distance >= firstDenseDist + CHASE_SECOND_MIN_GAIN_M); i += 1) {
+        const decision = autopilot(world.state, lead, false);
+        const jumpPressed = decision.jump && !lastJump;
+        lastJump = decision.jump;
+        const events = world.step(STEP, jumpPressed, decision.jump, decision.slide, false);
+        if (events & EVENT_OVER) return overResult();
+        if (events & EVENT_WIN) return { screen: SCREEN_WIN, best: world.state.score };
+      }
     }
+    // If no dense frame turned up, take a looser one (an oven or a knife,
+    // plus corn) rather than an empty frame; if that never comes either,
+    // take what is there.
+    if (!frameIsDense(world.state)) {
+      for (let i = 0; i < CHASE_LOOSE_WAIT_SECONDS / STEP && !frameIsLoose(world.state); i += 1) {
+        const decision = autopilot(world.state, lead, false);
+        const jumpPressed = decision.jump && !lastJump;
+        lastJump = decision.jump;
+        const events = world.step(STEP, jumpPressed, decision.jump, decision.slide, false);
+        if (events & EVENT_OVER) return overResult();
+        if (events & EVENT_WIN) return { screen: SCREEN_WIN, best: world.state.score };
+      }
+    }
+    // Pull the farmer right up behind the turkey for the close-call frame and
+    // stop here: running on after the pull is what used to lose the oven or
+    // the knife (the world moves a screen width in two seconds), so a frame
+    // that was dense when found came back empty. Gap 125 puts him at x 33,
+    // closer than the play shot's 120, with the warning and the "!" both
+    // firing under 130 — and exactly clear of the red edge pulse (which
+    // fires under gap 120), so no red smear down the left edge. No steps
+    // run after the pull, so no hit can turn it into a grab.
+    world.state.farmerGap = 125;
   }
-  const over = world.state.hearts === 0;
-  return { screen: over ? SCREEN_OVER : SCREEN_PLAY, best: world.state.score };
+  // Hearts at zero means the run ended without the event firing on the last
+  // step; the frozen frame still shows the turkey (see overResult).
+  if (world.state.hearts === 0) return overResult();
+  return { screen: SCREEN_PLAY, best: world.state.score };
 }

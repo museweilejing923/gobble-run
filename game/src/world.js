@@ -22,13 +22,18 @@ export const EVENT_WIN = 8;
 export const EVENT_JUMP = 16;
 export const EVENT_LAND = 32;
 
-/** A forgiving hitbox: the drawn turkey is fluffier than the box that can be hit. */
+/** A forgiving hitbox: the drawn turkey is fluffier than the box that can be hit.
+  The turkey is drawn wider now (76), so the box is inset further sideways,
+  keeping the hitbox the same size as before the visual enlargement (44 wide,
+  50 tall standing). A dive counts as a slide for the hitbox: holding down in
+  the air tucks the turkey, so a knife that used to clip its feet while diving
+  now passes over it. */
 function hitbox(player) {
-  const height = player.sliding ? PLAYER.slideHeight : PLAYER.height;
+  const height = (player.sliding || player.diving) ? PLAYER.slideHeight : PLAYER.height;
   return {
-    x: player.x + 10,
+    x: player.x + 16,
     y: player.y + (PLAYER.height - height) + 6,
-    width: PLAYER.width - 20,
+    width: PLAYER.width - 32,
     height: height - 8,
   };
 }
@@ -40,7 +45,7 @@ function overlaps(a, b) {
 export function createWorld(random) {
   const player = {
     x: PLAYER.x, y: FIELD.groundY - PLAYER.height, vy: 0,
-    onGround: true, sliding: false, invulnerable: 0, coyote: 0, buffer: 0, fallStart: 0,
+    onGround: true, sliding: false, diving: false, invulnerable: 0, coyote: 0, buffer: 0, fallStart: 0,
   };
   const obstacles = [];
   const knives = [];
@@ -48,7 +53,7 @@ export function createWorld(random) {
   const particles = [];
   for (let i = 0; i < POOL_SIZE; i += 1) {
     obstacles.push({ active: false, kind: KIND_HAY, x: 0, y: 0, width: 0, height: 0, passed: false });
-    knives.push({ active: false, x: 0, y: 0, width: 0, height: 0, spin: 0 });
+    knives.push({ active: false, x: 0, y: 0, width: 0, height: 0, spin: 0, passed: false });
     corns.push({ active: false, golden: false, x: 0, y: 0, size: 0 });
     particles.push({ active: false, kind: 0, x: 0, y: 0, vx: 0, vy: 0, life: 0, max: 1 });
   }
@@ -58,7 +63,24 @@ export function createWorld(random) {
     distance: 0, speed: RUN.startSpeed, farmerGap: FARMER.startGap,
     obstacleTimer: 1, knifeTimer: 2.2, cornTimer: 1.2, scrollX: 0,
     runTime: 0, milestone: 0, milestoneAt: -999,
+    // Combo streak: consecutive corn and dodges without a hit. Toast: one short
+    // line the renderer shows for 2 seconds (combo milestones, near-miss, level-up).
+    combo: 0, comboTimer: 0, toast: '', toastAt: -999,
   };
+
+  /** Show a short toast line. Callers only call this in real play, never on
+    the title screen's harmless run. */
+  function setToast(message) {
+    state.toast = message;
+    state.toastAt = state.elapsed;
+  }
+
+  /** One more clean scoring action: the streak grows and its timer refreshes,
+    capped so the score cannot run away on a long clean run. */
+  function buildCombo() {
+    state.combo = Math.min(SCORE.comboMax, state.combo + 1);
+    state.comboTimer = SCORE.comboWindow;
+  }
 
   function reset() {
     player.x = PLAYER.x;
@@ -66,6 +88,7 @@ export function createWorld(random) {
     player.vy = 0;
     player.onGround = true;
     player.sliding = false;
+    player.diving = false;
     player.invulnerable = 0;
     player.coyote = 0;
     player.buffer = 0;
@@ -87,6 +110,10 @@ export function createWorld(random) {
     state.runTime = 0;
     state.milestone = 0;
     state.milestoneAt = -999;
+    state.combo = 0;
+    state.comboTimer = 0;
+    state.toast = '';
+    state.toastAt = -999;
   }
 
   function free(pool) {
@@ -150,6 +177,7 @@ export function createWorld(random) {
     item.x = FIELD.width + 60;
     item.y = FIELD.groundY - KNIFE.flyHeight - KNIFE.height / 2;
     item.spin = random() * Math.PI * 2;
+    item.passed = false;
   }
 
   function spawnCornArc() {
@@ -173,6 +201,9 @@ export function createWorld(random) {
     state.hearts -= 1;
     state.farmerGap = Math.max(0, state.farmerGap - FARMER.hitPull);
     player.invulnerable = PLAYER.invulnerable;
+    // A hit breaks the streak: the combo and its toast go with it.
+    state.combo = 0;
+    state.comboTimer = 0;
     burst(player.x + PLAYER.width / 2, player.y + 20, 1, 10, 260);
   }
 
@@ -184,7 +215,16 @@ export function createWorld(random) {
   function step(dt, jumpPressed, jumpHeld, slideHeld, harmless) {
     let events = 0;
     state.elapsed += dt;
+    const beforeLevel = state.level;
     state.level = Math.min(LEVEL.max, 1 + Math.floor(state.elapsed / LEVEL.seconds));
+    if (!harmless && state.level > beforeLevel) {
+      setToast(`Level ${state.level} — faster!`);
+    }
+    // The combo fades if nothing is eaten or dodged for a while.
+    if (state.comboTimer > 0) {
+      state.comboTimer -= dt;
+      if (state.comboTimer <= 0) state.combo = 0;
+    }
     state.speed = harmless
       ? 300
       : Math.min(RUN.maxSpeed, RUN.startSpeed + state.distance * RUN.accelPerM);
@@ -231,6 +271,9 @@ export function createWorld(random) {
       player.onGround = true;
     }
     player.sliding = slideHeld && player.onGround;
+    // Diving: holding down in the air slams the turkey down in a tuck, and the
+    // tuck counts for the hitbox, so a dive is a real way out of a knife.
+    player.diving = slideHeld && !player.onGround;
     if (player.invulnerable > 0) player.invulnerable = Math.max(0, player.invulnerable - dt);
 
     // --- the farmer keeps coming unless the turkey runs clean ---
@@ -268,7 +311,15 @@ export function createWorld(random) {
       if (item.x + item.width < -80) { item.active = false; continue; }
       if (!item.passed && item.x + item.width < player.x) {
         item.passed = true;
-        if (!harmless) state.score += SCORE.dodgePoints;
+        if (!harmless) {
+          // A clean dodge builds the combo; a streak of 5 pays the near-miss
+          // bonus instead of the plain dodge points, and says so on screen.
+          buildCombo();
+          const streak = state.combo >= 5;
+          state.score += streak ? SCORE.nearMissPoints : SCORE.dodgePoints;
+          if (state.combo === 5) setToast('Near-miss streak! +15');
+          else if (state.combo === 8) setToast('Combo x8 — unstoppable!');
+        }
       }
       if (harmless || player.invulnerable > 0) continue;
       if (overlaps(box, item)) {
@@ -287,6 +338,14 @@ export function createWorld(random) {
       item.x -= (state.speed + KNIFE.extraSpeed) * dt;
       item.spin += dt * 11;
       if (item.x + item.width < -80) { item.active = false; continue; }
+      if (!item.passed && item.x + item.width < player.x) {
+        item.passed = true;
+        if (!harmless && player.invulnerable === 0) {
+          buildCombo();
+          state.score += state.combo >= 5 ? SCORE.nearMissPoints : SCORE.dodgePoints;
+          if (state.combo === 5) setToast('Near-miss streak! +15');
+        }
+      }
       if (harmless || player.invulnerable > 0) continue;
       if (overlaps(box, item)) {
         item.active = false;
@@ -307,7 +366,18 @@ export function createWorld(random) {
       const cob = { x: item.x, y: item.y, width: item.size, height: item.size };
       if (overlaps(box, cob)) {
         item.active = false;
-        state.score += item.golden ? CORN.goldenPoints : CORN.points;
+        buildCombo();
+        const base = item.golden ? CORN.goldenPoints : CORN.points;
+        state.score += base + (state.combo - 1) * SCORE.comboPerStep;
+        if (item.golden) {
+          // Golden corn pushes the farmer back a little: a burst of energy.
+          state.farmerGap = Math.min(FARMER.startGap, state.farmerGap + SCORE.goldenPushBack);
+          if (state.combo >= 5) setToast(`Golden corn! Combo x${state.combo}`);
+        } else if (state.combo === 5) {
+          setToast('Combo x5!');
+        } else if (state.combo === 8) {
+          setToast('Combo x8 — unstoppable!');
+        }
         burst(item.x + item.size / 2, item.y + item.size / 2, 2, 6, 140);
         events |= EVENT_CORN;
       }
